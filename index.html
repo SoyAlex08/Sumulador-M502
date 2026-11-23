@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulación Ruta M502 MetroBus</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js para gráficas -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <!-- Three.js y OrbitControls para la vista 3D de la ruta -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Motor de simulación de eventos discretos -->
+    <script src="js/motor-simulacion.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #e2e8f0; overflow: hidden; margin: 0; padding: 0; }
+        #canvas-container { position: absolute; inset: 0; z-index: 1; }
+
+        #ui-panel-left, #ui-panel-right {
+            position: absolute; top: 0; height: 100vh; width: 100%; max-width: 330px; z-index: 10;
+            background: rgba(15, 23, 42, 0.86); backdrop-filter: blur(12px);
+            display: flex; flex-direction: column; overflow-y: auto;
+        }
+        #ui-panel-left { left: 0; border-right: 1px solid rgba(255,255,255,0.1); }
+        #ui-panel-right { right: 0; border-left: 1px solid rgba(255,255,255,0.1); }
+        #ui-panel-left::-webkit-scrollbar, #ui-panel-right::-webkit-scrollbar, #analytics-page::-webkit-scrollbar { width: 6px; }
+        #ui-panel-left::-webkit-scrollbar-thumb, #ui-panel-right::-webkit-scrollbar-thumb, #analytics-page::-webkit-scrollbar-thumb { background: #475569; border-radius: 10px; }
+
+        .control-group { margin-bottom: 1.1rem; }
+        .slider { -webkit-appearance: none; width: 100%; height: 4px; border-radius: 5px; background: #475569; outline: none; margin-top: 0.5rem; }
+        .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #f59e0b; cursor: pointer; }
+
+        .stat-card { background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.05); border-radius: 0.5rem; padding: 0.65rem 0.75rem; display: flex; flex-direction: column; }
+        .stat-value { font-size: 1.2rem; font-weight: 700; color: #38bdf8; font-variant-numeric: tabular-nums; }
+        .stat-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.2rem; }
+
+        .scenario-btn { flex: 1; padding: .55rem .4rem; border-radius: .5rem; border: 1px solid #475569; background: rgba(30,41,59,.7); font-size: .72rem; font-weight: 600; color: #cbd5e1; transition: all .15s; }
+        .scenario-btn.active { border-color: #f59e0b; background: rgba(245,158,11,.18); color: #fde68a; }
+
+        .badge-3d { position: absolute; padding: 3px 8px; border-radius: 4px; font-size: 0.66rem; font-weight: 600; pointer-events: none; white-space: nowrap; transform: translate(-50%, -100%); box-shadow: 0 4px 6px -1px rgba(0,0,0,.3); }
+        .bus-badge { position: absolute; padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; font-weight: 700; pointer-events: none; white-space: nowrap; transform: translate(-50%, -100%); background: rgba(2,6,23,.85); border: 1px solid rgba(148,163,184,.4); color: #f8fafc; }
+
+        #instructions { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(2,6,23,.82); padding: 7px 13px; border-radius: 8px; font-size: .68rem; line-height: 1.45; text-align: center; pointer-events: none; border: 1px solid rgba(148,163,184,.3); transition: opacity .35s; }
+        #instructions.hidden-tip { opacity: 0; }
+
+        #analytics-page { display: none; position: fixed; inset: 0; z-index: 30; overflow-y: auto; background: #0f172a; }
+        #analytics-page.active { display: block; }
+        .analytics-card { background: rgba(30,41,59,.82); border: 1px solid rgba(148,163,184,.18); border-radius: 12px; padding: 16px; }
+        .analytics-chart { position: relative; height: 300px; }
+        table.data { width: 100%; border-collapse: collapse; font-size: .78rem; font-variant-numeric: tabular-nums; }
+        table.data th { text-align: left; color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: .64rem; letter-spacing: .04em; padding: 8px; border-bottom: 1px solid #334155; }
+        table.data td { padding: 7px 8px; border-bottom: 1px solid rgba(51,65,85,.6); }
+        table.data td.num, table.data th.num { text-align: right; }
+        .check-ok { color: #34d399; } .check-bad { color: #f87171; }
+        .better { color: #34d399; } .worse { color: #f87171; } .neutral { color: #cbd5e1; }
+
+        @media (max-width: 900px) {
+            #ui-panel-left, #ui-panel-right { max-width: 270px; }
+            .analytics-chart { height: 240px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <div id="labels-container" class="absolute inset-0 pointer-events-none overflow-hidden z-[5]"></div>
+
+    <!-- ============ PANEL IZQUIERDO: ESTADO DEL SISTEMA ============ -->
+    <div id="ui-panel-left" class="p-5 shadow-2xl">
+        <div class="mb-4 border-b border-slate-700/50 pb-4">
+            <h1 class="text-xl font-bold text-white flex items-center gap-2 tracking-tight">
+                <span class="w-3 h-3 rounded-full bg-amber-500 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.7)]"></span>
+                Ruta M502 · MetroBus
+            </h1>
+            <p class="text-xs text-slate-400 mt-1.5 leading-relaxed">Simulación de eventos discretos<br>Estación Marañón → Calle Peña Blanca (sentido Mañanitas)</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2.5 mb-4">
+            <div class="stat-card col-span-2 text-center bg-slate-800/90 border-slate-600">
+                <span class="stat-label">Reloj de simulación</span>
+                <span class="stat-value text-white text-2xl tracking-widest font-mono" id="ui-time">05:00:00</span>
+                <span class="text-[10px] mt-1 font-semibold" id="ui-phase">Llegadas y despachos activos (5:00–9:00)</span>
+            </div>
+
+            <div class="col-span-2 mt-1"><span class="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Balance de pasajeros</span></div>
+            <div class="stat-card col-span-2 bg-emerald-950/30 border-emerald-800/50">
+                <span class="stat-label text-emerald-300">Pasajeros generados</span>
+                <span class="stat-value text-emerald-400 text-2xl" id="ui-generated">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">= Abordados</span>
+                <span class="stat-value text-indigo-400" id="ui-boarded">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">+ En cola</span>
+                <span class="stat-value text-amber-400" id="ui-waiting">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">A bordo ahora</span>
+                <span class="stat-value text-purple-400" id="ui-onboard">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Descendidos</span>
+                <span class="stat-value text-sky-400" id="ui-alighted">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Espera promedio</span>
+                <span class="stat-value text-cyan-300" id="ui-avgwait">--</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Buses (ruta / fin)</span>
+                <span class="stat-value text-slate-100" id="ui-buses">0 / 0</span>
+            </div>
+            <div class="stat-card col-span-2 border-rose-500/30 bg-rose-950/40">
+                <span class="stat-label text-rose-300">Se quedaron por bus lleno (eventos)</span>
+                <span class="stat-value text-rose-400" id="ui-leftbehind">0</span>
+            </div>
+        </div>
+
+        <div class="mb-4 p-3 bg-slate-800/60 border border-slate-700/50 rounded-lg">
+            <h4 class="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-2 border-b border-slate-700 pb-1 flex justify-between">
+                <span>Cola por parada</span><span class="text-slate-500">actual · máx</span>
+            </h4>
+            <div id="ui-queues" class="space-y-1.5 text-[11px]"></div>
+        </div>
+
+        <div class="mb-4 p-3 bg-slate-800/60 border border-slate-700/50 rounded-lg">
+            <h4 class="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-2 border-b border-slate-700 pb-1">Evolución de colas</h4>
+            <div class="w-full h-32"><canvas id="liveChart"></canvas></div>
+        </div>
+
+        <div class="p-3 bg-slate-800/60 border border-slate-700/50 rounded-lg">
+            <h4 class="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-2 border-b border-slate-700 pb-1">Últimos eventos</h4>
+            <ul id="ui-log" class="space-y-1 text-[10px] text-slate-400 font-mono"></ul>
+        </div>
+    </div>
+
+    <!-- ============ PANEL DERECHO: CONTROLES ============ -->
+    <div id="ui-panel-right" class="p-5 shadow-2xl">
+        <div class="mb-4">
+            <span class="text-[10px] text-amber-300 font-bold uppercase tracking-wider">Escenario</span>
+            <div class="flex gap-2 mt-2">
+                <button class="scenario-btn active" data-scenario="inicial">Inicial<br><span class="font-normal text-[10px] opacity-80">3 desp./h · cada 20 min</span></button>
+                <button class="scenario-btn" data-scenario="alternativo">Alternativo<br><span class="font-normal text-[10px] opacity-80">4 desp./h · cada 15 min</span></button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label for="param-rep" class="text-xs text-slate-300 flex justify-between font-medium">
+                <span>Réplica (semilla)</span>
+                <span id="val-rep" class="text-amber-400 font-mono">1 de 5</span>
+            </label>
+            <input type="range" id="param-rep" class="slider" min="1" max="5" step="1" value="1">
+            <p class="text-[10px] text-slate-500 mt-1">Cada réplica usa una semilla distinta; la demanda es la misma en ambos escenarios para la misma réplica.</p>
+        </div>
+
+        <div class="control-group">
+            <label for="param-speed" class="text-xs text-slate-300 flex justify-between font-medium">
+                <span>Velocidad de la animación</span>
+                <span id="val-speed" class="text-white font-mono">x120</span>
+            </label>
+            <input type="range" id="param-speed" class="slider" min="0" max="7" step="1" value="3">
+            <p class="text-[10px] text-slate-500 mt-1">Segundos simulados por cada segundo real.</p>
+        </div>
+
+        <div class="flex gap-2 mt-1">
+            <button id="btn-play" class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded shadow-lg">▶ Iniciar</button>
+            <button id="btn-pause" class="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded shadow-lg">⏸ Pausa</button>
+            <button id="btn-reset" class="flex-1 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold rounded shadow-lg">↺ Reiniciar</button>
+        </div>
+        <button id="btn-finish" class="w-full mt-3 py-2.5 bg-cyan-700 hover:bg-cyan-600 text-white text-sm font-bold rounded-lg shadow-lg">■ Completar corrida y ver resultados</button>
+        <button id="btn-experiment" class="w-full mt-2 mb-5 py-2.5 bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-bold rounded-lg shadow-lg">Ejecutar experimento (5 réplicas × 2 escenarios)</button>
+
+        <div class="mb-4 p-3 bg-slate-800/50 border border-slate-700/50 rounded-lg">
+            <h4 class="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-2 border-b border-slate-700 pb-1">Escenario activo</h4>
+            <div class="text-[11px] text-slate-400 space-y-1">
+                <div class="flex justify-between"><span>Intervalo programado</span><span class="text-amber-300 font-mono" id="ui-sc-headway">20 min</span></div>
+                <div class="flex justify-between"><span>Despachos (5:00–9:00)</span><span class="text-amber-300 font-mono" id="ui-sc-buses">12</span></div>
+                <div class="flex justify-between"><span>Último despacho</span><span class="text-amber-300 font-mono" id="ui-sc-last">08:40</span></div>
+                <div class="flex justify-between"><span>Capacidad por bus</span><span class="text-amber-300 font-mono">80 pasajeros</span></div>
+            </div>
+        </div>
+
+        <details class="mb-3 p-3 bg-slate-800/50 border border-slate-700/50 rounded-lg">
+            <summary class="cursor-pointer text-[10px] font-bold text-slate-300 uppercase tracking-wider">Llegada de pasajeros (exponencial)</summary>
+            <table class="data mt-2" style="font-size:.66rem"><thead><tr><th>Parada</th><th class="num">pax/h</th><th class="num">Media (s)</th></tr></thead><tbody id="tbl-arrivals"></tbody></table>
+        </details>
+        <details class="mb-3 p-3 bg-slate-800/50 border border-slate-700/50 rounded-lg">
+            <summary class="cursor-pointer text-[10px] font-bold text-slate-300 uppercase tracking-wider">Tiempos de viaje (triangular, min)</summary>
+            <table class="data mt-2" style="font-size:.66rem"><thead><tr><th>Tramo</th><th class="num">Mín</th><th class="num">Moda</th><th class="num">Máx</th></tr></thead><tbody id="tbl-travel"></tbody></table>
+        </details>
+        <details class="mb-3 p-3 bg-slate-800/50 border border-slate-700/50 rounded-lg">
+            <summary class="cursor-pointer text-[10px] font-bold text-slate-300 uppercase tracking-wider">Reglas de operación</summary>
+            <ul class="mt-2 space-y-1.5 text-[10px] text-slate-300 leading-relaxed list-disc pl-4">
+                <li>Los buses salen vacíos de L1 y no hay llegadas de pasajeros en L1.</li>
+                <li>Descenso: 0 % en L2; 20 % de la ocupación en L3, L4 y L5 (redondeo al entero más cercano); 100 % en L6.</li>
+                <li>Abordan <b>A = mín(cola al iniciar el abordaje, 80 − ocupación)</b>. Quien llega durante el abordaje espera el siguiente bus.</li>
+                <li>Tiempo en parada = 10 s + 5 s × A + 3 s × D. En L6: 10 s + 3 s × D.</li>
+                <li>Después de las 9:00 no hay llegadas ni despachos; los buses en ruta terminan el recorrido y aún recogen a quienes esperan.</li>
+            </ul>
+        </details>
+    </div>
+
+    <div id="instructions">🖱️ <b>Izquierdo:</b> rotar · <b>Derecho:</b> desplazar · <b>Rueda:</b> zoom</div>
+
+    <!-- ============ PANTALLA DE RESULTADOS ============ -->
+    <section id="analytics-page">
+        <header class="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 px-6 py-5 bg-slate-900 border-b border-slate-700 shadow-xl">
+            <div>
+                <p class="text-sm uppercase tracking-widest text-amber-400 font-bold">Ruta M502 · MetroBus de Panamá</p>
+                <h2 class="text-2xl md:text-3xl font-bold text-white">Resultados de la simulación</h2>
+                <p id="analytics-status" class="text-sm text-slate-400 mt-1"></p>
+            </div>
+            <button id="btn-back-sim" class="px-5 py-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">← Volver a la simulación</button>
+        </header>
+
+        <main class="max-w-screen-2xl mx-auto p-5 md:p-8 space-y-8">
+            <!-- Corrida visual -->
+            <section id="run-section">
+                <h3 class="text-lg font-bold text-amber-300 mb-1">Corrida individual</h3>
+                <p class="text-sm text-slate-400 mb-4" id="run-subtitle"></p>
+                <div id="run-kpis" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5"></div>
+                <div class="grid xl:grid-cols-2 gap-5">
+                    <div class="analytics-card overflow-x-auto">
+                        <h4 class="font-bold text-white mb-3">Indicadores por parada</h4>
+                        <table class="data" id="run-stops"></table>
+                        <h4 class="font-bold text-white mt-5 mb-2">Verificaciones de consistencia</h4>
+                        <ul id="run-checks" class="text-sm space-y-1"></ul>
+                    </div>
+                    <div class="analytics-card">
+                        <h4 class="font-bold text-white mb-3">Longitud de cola por parada en el tiempo</h4>
+                        <div class="analytics-chart"><canvas id="runQueueChart"></canvas></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Experimento -->
+            <section id="exp-section">
+                <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+                    <div>
+                        <h3 class="text-lg font-bold text-indigo-300">Experimento: comparación de escenarios</h3>
+                        <p class="text-sm text-slate-400">5 réplicas por escenario · 80 pasajeros por bus · números aleatorios comunes por par de réplicas</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="btn-run-exp" class="px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-bold">Ejecutar experimento</button>
+                        <button id="btn-csv" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold hidden">Descargar CSV</button>
+                    </div>
+                </div>
+                <div id="exp-empty" class="analytics-card text-slate-400 text-sm">Aún no se ejecuta el experimento. Presiona <b>Ejecutar experimento</b> para correr las 10 réplicas y llenar la Tabla 16.</div>
+                <div id="exp-content" class="hidden space-y-5">
+                    <div class="analytics-card overflow-x-auto">
+                        <h4 class="font-bold text-white mb-1">Comparación de escenarios (promedio de 5 réplicas)</h4>
+                        <p class="text-xs text-slate-400 mb-3">Diferencia absoluta = promedio alternativo − promedio inicial. Variación % = 100 × (alternativo − inicial) ÷ inicial. Si el inicial es cero, la variación porcentual no aplica.</p>
+                        <table class="data" id="exp-compare"></table>
+                        <div id="exp-findings" class="mt-4 text-sm text-slate-300 space-y-1.5"></div>
+                    </div>
+                    <div class="grid xl:grid-cols-2 gap-5">
+                        <div class="analytics-card">
+                            <h4 class="font-bold text-white mb-3">Tiempo promedio de espera por réplica (min)</h4>
+                            <div class="analytics-chart"><canvas id="expWaitChart"></canvas></div>
+                        </div>
+                        <div class="analytics-card">
+                            <h4 class="font-bold text-white mb-3">Cola máxima promedio por parada</h4>
+                            <div class="analytics-chart"><canvas id="expQueueChart"></canvas></div>
+                        </div>
+                    </div>
+                    <div class="analytics-card overflow-x-auto">
+                        <h4 class="font-bold text-white mb-3">Registro de las 10 réplicas</h4>
+                        <table class="data" id="exp-records"></table>
+                    </div>
+                </div>
+            </section>
+
+            <p class="text-xs text-slate-500 pb-6">Los parámetros de demanda, viaje y servicio son estimaciones académicas del documento del proyecto. Los resultados dependen de esos supuestos y no representan datos oficiales de MiBus.</p>
+        </main>
+    </section>
+
+<script>
+(function () {
+    'use strict';
+    const { STOPS, SEGMENTS, SCENARIOS, MODEL, Simulation, runExperiment, formatClock } = window.M502;
+
+    const STOP_COLORS = ['#3b82f6', '#10b981', '#22d3ee', '#a78bfa', '#f472b6', '#ef4444'];
+    const QUEUE_COLORS = ['#10b981', '#22d3ee', '#a78bfa', '#f472b6'];
+    const SPEEDS = [15, 30, 60, 120, 240, 480, 900, 1800];
+
+    const state = {
+        scenario: 'inicial', replication: 1, speedIdx: 3,
+        sim: null, simT: 0, playing: false, lastFrame: null,
+        experiment: null, autoShown: false
+    };
+
+    // ------------------------------------------------------------------
+    // Utilidades
+    // ------------------------------------------------------------------
+    const $ = id => document.getElementById(id);
+    const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? 'N/D' : Number(v).toLocaleString('es-PA', { minimumFractionDigits: d, maximumFractionDigits: d });
+    const fmtMin = v => v === null ? 'N/D' : fmt(v, 2) + ' min';
+    const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
+    // ------------------------------------------------------------------
+    // Tablas de parámetros
+    // ------------------------------------------------------------------
+    $('tbl-arrivals').innerHTML = STOPS.slice(1, 5).map(s => `<tr><td>${s.id} ${s.short}</td><td class="num">${s.ratePerHour}</td><td class="num">${s.meanInterarrival}</td></tr>`).join('')
+        + `<tr><td><b>Total</b></td><td class="num"><b>168</b></td><td class="num">—</td></tr>`;
+    $('tbl-travel').innerHTML = SEGMENTS.map(g => `<tr><td>${STOPS[g.from].id}→${STOPS[g.to].id}</td><td class="num">${g.min / 60}</td><td class="num">${g.mode / 60}</td><td class="num">${g.max / 60}</td></tr>`).join('')
+        + `<tr><td><b>Total</b></td><td class="num"><b>52</b></td><td class="num"><b>69</b></td><td class="num"><b>92</b></td></tr>`;
+
+    // ------------------------------------------------------------------
+    // Escena 3D
+    // ------------------------------------------------------------------
+    let scene, camera, renderer, controls, curve, stopU = [], busMeshes = {}, queueMeshes = [], stopLabels = [], busLabels = {};
+    const tmpMatrix = new THREE.Matrix4();
+    const MAX_VISIBLE_PAX = 60;
+
+    function initThree() {
+        const container = $('canvas-container');
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0b1220);
+
+        camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 1000);
+        camera.position.set(0, 150, 150);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.maxPolarAngle = Math.PI / 2.15;
+        controls.target.set(0, 0, 0);
+        controls.addEventListener('start', () => $('instructions').classList.add('hidden-tip'));
+
+        scene.add(new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.75));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+        sun.position.set(60, 120, 40);
+        sun.castShadow = true;
+        sun.shadow.camera.left = -150; sun.shadow.camera.right = 150; sun.shadow.camera.top = 150; sun.shadow.camera.bottom = -150;
+        sun.shadow.mapSize.set(2048, 2048);
+        scene.add(sun);
+
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.MeshLambertMaterial({ color: 0x14231a }));
+        ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+        scene.add(ground);
+        const grid = new THREE.GridHelper(600, 60, 0x1f3a2a, 0x1a2e22);
+        grid.position.y = 0.02; scene.add(grid);
+
+        buildRoute();
+        buildStops();
+        window.addEventListener('resize', onResize);
+    }
+
+    function buildRoute() {
+        // Trazado esquemático (no a escala geográfica)
+        const pts = [[-105, 40], [-70, 55], [-40, 20], [-5, -25], [25, -10], [50, 30], [80, 25], [100, -20], [110, -45]]
+            .map(p => new THREE.Vector3(p[0] * 0.6, 0, p[1] * 0.75));
+        curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.3);
+
+        // Posición de cada parada proporcional al tiempo modal de viaje
+        const modes = SEGMENTS.map(s => s.mode);
+        const total = modes.reduce((a, b) => a + b, 0);
+        let acc = 0; stopU = [0];
+        for (const m of modes) { acc += m; stopU.push(acc / total); }
+
+        // Cinta de la vía
+        const N = 400, width = 5;
+        const positions = [], indices = [];
+        for (let i = 0; i <= N; i++) {
+            const u = i / N;
+            const p = curve.getPointAt(u);
+            const t = curve.getTangentAt(u);
+            const n = new THREE.Vector3(-t.z, 0, t.x).normalize();
+            positions.push(p.x + n.x * width / 2, 0.05, p.z + n.z * width / 2, p.x - n.x * width / 2, 0.05, p.z - n.z * width / 2);
+            if (i < N) { const k = i * 2; indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geo.setIndex(indices); geo.computeVertexNormals();
+        const road = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x334155, side: THREE.DoubleSide }));
+        road.receiveShadow = true;
+        scene.add(road);
+
+        // Línea central discontinua
+        const dashPts = curve.getSpacedPoints(300).map(p => new THREE.Vector3(p.x, 0.08, p.z));
+        const dash = new THREE.Line(new THREE.BufferGeometry().setFromPoints(dashPts), new THREE.LineDashedMaterial({ color: 0xfacc15, dashSize: 1.5, gapSize: 1.5 }));
+        dash.computeLineDistances(); scene.add(dash);
+    }
+
+    function sideNormal(u) {
+        const t = curve.getTangentAt(u);
+        return new THREE.Vector3(-t.z, 0, t.x).normalize();
+    }
+
+    function buildStops() {
+        const paxGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.5, 6);
+        const paxMat = new THREE.MeshLambertMaterial({ color: 0xfbbf24 });
+        const labels = $('labels-container');
+
+        STOPS.forEach((s, i) => {
+            const u = stopU[i];
+            const p = curve.getPointAt(u);
+            const n = sideNormal(u);
+            const t = curve.getTangentAt(u);
+            const angle = Math.atan2(t.x, t.z);
+            const color = new THREE.Color(STOP_COLORS[i]);
+
+            const group = new THREE.Group();
+            group.position.set(p.x + n.x * 5.5, 0, p.z + n.z * 5.5);
+            group.rotation.y = angle;
+            const platform = new THREE.Mesh(new THREE.BoxGeometry(3, 0.3, 9), new THREE.MeshLambertMaterial({ color: 0x64748b }));
+            platform.position.y = 0.15; platform.receiveShadow = true; group.add(platform);
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.25, 9.4), new THREE.MeshLambertMaterial({ color }));
+            roof.position.y = 3.4; roof.castShadow = true; group.add(roof);
+            [-4, 4].forEach(z => {
+                const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.2, 0.2), new THREE.MeshLambertMaterial({ color: 0xcbd5e1 }));
+                post.position.set(1.2, 1.7, z); group.add(post);
+            });
+            const sign = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.2, 1.2), new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.35 }));
+            sign.position.set(-1.6, 4.8, -4.5); group.add(sign);
+            scene.add(group);
+
+            // Pasajeros en cola (solo L2–L5)
+            if (i >= 1 && i <= 4) {
+                const mesh = new THREE.InstancedMesh(paxGeo, paxMat, MAX_VISIBLE_PAX);
+                mesh.count = 0; mesh.castShadow = true;
+                mesh.userData = { origin: new THREE.Vector3(p.x + n.x * 8.5, 0.75, p.z + n.z * 8.5), n, t: t.clone().normalize() };
+                scene.add(mesh);
+                queueMeshes[i] = mesh;
+            }
+
+            const el = document.createElement('div');
+            el.className = 'badge-3d';
+            el.style.background = 'rgba(2,6,23,.88)';
+            el.style.border = '1px solid ' + STOP_COLORS[i];
+            el.style.color = '#f8fafc';
+            labels.appendChild(el);
+            stopLabels[i] = { el, pos: new THREE.Vector3(group.position.x, 7, group.position.z) };
+        });
+    }
+
+    function makeBusMesh() {
+        const g = new THREE.Group();
+        const bodyMat = new THREE.MeshLambertMaterial({ color: 0x22c55e });
+        const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.2, 7), bodyMat);
+        body.position.y = 1.5; body.castShadow = true; g.add(body);
+        const win = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.7, 6.2), new THREE.MeshLambertMaterial({ color: 0x0f172a }));
+        win.position.y = 1.95; g.add(win);
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.15, 6.6), new THREE.MeshLambertMaterial({ color: 0xf8fafc }));
+        roof.position.y = 2.68; g.add(roof);
+        g.userData.bodyMat = bodyMat;
+        scene.add(g);
+        return g;
+    }
+
+    function loadColor(occ) {
+        const r = clamp(occ / MODEL.capacity, 0, 1);
+        const c = new THREE.Color();
+        if (r < 0.6) c.setRGB(0.13 + r * 1.2, 0.77, 0.37 - r * 0.3);
+        else c.setRGB(0.95, 0.77 - (r - 0.6) * 1.6, 0.1);
+        return c;
+    }
+
+    function clearBuses() {
+        Object.values(busMeshes).forEach(m => scene.remove(m));
+        Object.values(busLabels).forEach(l => l.remove());
+        busMeshes = {}; busLabels = {};
+    }
+
+    function updateScene(t) {
+        const sim = state.sim;
+        // Buses
+        for (const b of sim.buses) {
+            let mesh = busMeshes[b.id];
+            if (b.state === 'finalizado' && t >= b.exitTime) {
+                if (mesh) { mesh.visible = false; busLabels[b.id].style.display = 'none'; }
+                continue;
+            }
+            if (!mesh) {
+                mesh = busMeshes[b.id] = makeBusMesh();
+                const lbl = document.createElement('div'); lbl.className = 'bus-badge';
+                $('labels-container').appendChild(lbl); busLabels[b.id] = lbl;
+            }
+            let u, offset = 1.3;
+            if (b.state === 'en_ruta') {
+                const f = clamp((t - b.segStart) / (b.segEnd - b.segStart), 0, 1);
+                u = stopU[b.seg] + (stopU[b.seg + 1] - stopU[b.seg]) * f;
+            } else {
+                u = stopU[b.stopIdx]; offset = 2.4;
+            }
+            u = clamp(u, 0.0005, 0.9995);
+            const p = curve.getPointAt(u), tg = curve.getTangentAt(u), n = sideNormal(u);
+            mesh.visible = true;
+            mesh.position.set(p.x + n.x * offset, 0, p.z + n.z * offset);
+            mesh.rotation.y = Math.atan2(tg.x, tg.z);
+            mesh.userData.bodyMat.color.copy(loadColor(b.occupancy));
+            const lbl = busLabels[b.id];
+            lbl.style.display = '';
+            lbl.textContent = `Bus ${b.number} · ${b.occupancy}/${MODEL.capacity}`;
+            lbl.dataset.x = mesh.position.x; lbl.dataset.z = mesh.position.z;
+        }
+        // Colas
+        for (let i = 1; i <= 4; i++) {
+            const mesh = queueMeshes[i];
+            const q = sim.queues[i].length;
+            const shown = Math.min(q, MAX_VISIBLE_PAX);
+            const { origin, n, t: tg } = mesh.userData;
+            for (let k = 0; k < shown; k++) {
+                const row = Math.floor(k / 10), col = k % 10;
+                tmpMatrix.makeTranslation(
+                    origin.x + n.x * row * 1.1 + tg.x * (col - 4.5) * 0.95, origin.y,
+                    origin.z + n.z * row * 1.1 + tg.z * (col - 4.5) * 0.95);
+                mesh.setMatrixAt(k, tmpMatrix);
+            }
+            mesh.count = shown;
+            mesh.instanceMatrix.needsUpdate = true;
+        }
+        // Etiquetas de paradas
+        STOPS.forEach((s, i) => {
+            const extra = (i >= 1 && i <= 4) ? ` · cola ${sim.queues[i].length}` : (i === 0 ? ' · despacho' : ' · destino');
+            stopLabels[i].el.textContent = `${s.id} ${s.short}${extra}`;
+        });
+    }
+
+    const projVec = new THREE.Vector3();
+    function placeLabel(el, x, y, z) {
+        projVec.set(x, y, z).project(camera);
+        if (projVec.z > 1) { el.style.visibility = 'hidden'; return; }
+        el.style.visibility = 'visible';
+        el.style.left = ((projVec.x + 1) / 2 * window.innerWidth) + 'px';
+        el.style.top = ((1 - projVec.y) / 2 * window.innerHeight) + 'px';
+    }
+
+    function updateLabels() {
+        stopLabels.forEach(l => placeLabel(l.el, l.pos.x, l.pos.y, l.pos.z));
+        Object.values(busLabels).forEach(el => {
+            if (el.style.display === 'none' || el.dataset.x === undefined) return;
+            placeLabel(el, Number(el.dataset.x), 3.6, Number(el.dataset.z));
+        });
+    }
+
+    function onResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // ------------------------------------------------------------------
+    // Gráfica en vivo
+    // ------------------------------------------------------------------
+    let liveChart = null;
+    function initLiveChart() {
+        liveChart = new Chart($('liveChart'), {
+            type: 'line',
+            data: { labels: [], datasets: [1, 2, 3, 4].map((i, k) => ({ label: STOPS[i].id, data: [], borderColor: QUEUE_COLORS[k], borderWidth: 1.5, pointRadius: 0, tension: 0.25 })) },
+            options: {
+                animation: false, responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 8, font: { size: 9 } } } },
+                scales: { x: { ticks: { color: '#64748b', font: { size: 8 }, maxTicksLimit: 5 }, grid: { color: 'rgba(51,65,85,.4)' } },
+                          y: { beginAtZero: true, ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: 'rgba(51,65,85,.4)' } } }
+            }
+        });
+    }
+    function refreshLiveChart() {
+        const s = state.sim.samples;
+        if (liveChart.data.labels.length === s.length) return;
+        liveChart.data.labels = s.map(x => formatClock(x.t).slice(0, 5));
+        liveChart.data.datasets.forEach((ds, k) => { ds.data = s.map(x => x.queues[k]); });
+        liveChart.update('none');
+    }
+
+    // ------------------------------------------------------------------
+    // Paneles
+    // ------------------------------------------------------------------
+    function updateScenarioInfo() {
+        const sc = SCENARIOS[state.scenario];
+        const n = Math.ceil(MODEL.horizon / sc.headway);
+        $('ui-sc-headway').textContent = sc.headway / 60 + ' min';
+        $('ui-sc-buses').textContent = n;
+        $('ui-sc-last').textContent = formatClock((n - 1) * sc.headway).slice(0, 5);
+        document.querySelectorAll('.scenario-btn').forEach(b => b.classList.toggle('active', b.dataset.scenario === state.scenario));
+    }
+
+    function updatePanels(t) {
+        const sim = state.sim;
+        $('ui-time').textContent = formatClock(t);
+        const phase = $('ui-phase');
+        if (sim.finished) { phase.textContent = 'Corrida finalizada: todos los buses salieron de L6'; phase.className = 'text-[10px] mt-1 font-semibold text-cyan-300'; }
+        else if (t < MODEL.horizon) { phase.textContent = 'Llegadas y despachos activos (5:00–9:00)'; phase.className = 'text-[10px] mt-1 font-semibold text-emerald-300'; }
+        else { phase.textContent = 'Cierre: buses en ruta terminan el recorrido'; phase.className = 'text-[10px] mt-1 font-semibold text-amber-300'; }
+
+        const waiting = [1, 2, 3, 4].reduce((s, i) => s + sim.queues[i].length, 0);
+        const onboard = sim.buses.reduce((s, b) => s + (b.state !== 'finalizado' ? b.occupancy : 0), 0);
+        const active = sim.buses.filter(b => b.state !== 'finalizado').length;
+        $('ui-generated').textContent = sim.generatedTotal;
+        $('ui-boarded').textContent = sim.boardedTotal;
+        $('ui-waiting').textContent = waiting;
+        $('ui-onboard').textContent = onboard;
+        $('ui-alighted').textContent = sim.alightedTotal;
+        $('ui-avgwait').textContent = sim.waitCount ? fmt(sim.waitSum / sim.waitCount / 60, 1) + ' min' : '--';
+        $('ui-buses').textContent = `${active} / ${sim.buses.length - active}`;
+        $('ui-leftbehind').textContent = sim.leftBehindEvents;
+
+        $('ui-queues').innerHTML = [1, 2, 3, 4].map((i, k) => {
+            const q = sim.queues[i].length, m = sim.maxQueue[i];
+            const pct = m ? (q / Math.max(m, 1)) * 100 : 0;
+            return `<div><div class="flex justify-between"><span class="text-slate-300"><span style="color:${QUEUE_COLORS[k]}">●</span> ${STOPS[i].id} ${STOPS[i].short}</span><span class="font-mono text-slate-200">${q} · <span class="text-slate-500">${m}</span></span></div>
+                <div class="h-1 bg-slate-700 rounded mt-0.5"><div class="h-1 rounded" style="width:${pct}%;background:${QUEUE_COLORS[k]}"></div></div></div>`;
+        }).join('');
+
+        $('ui-log').innerHTML = sim.log.slice(-6).reverse().map(e => `<li><span class="text-slate-500">${formatClock(e.t).slice(0, 5)}</span> ${e.msg}</li>`).join('') || '<li>Sin eventos todavía.</li>';
+        refreshLiveChart();
+    }
+
+    // ------------------------------------------------------------------
+    // Control de la corrida
+    // ------------------------------------------------------------------
+    function resetSimulation() {
+        state.sim = new Simulation(state.scenario, state.replication);
+        state.simT = 0; state.playing = false; state.autoShown = false;
+        clearBuses();
+        state.sim.runUntil(0);
+        liveChart.data.labels = []; liveChart.update('none');
+        updateScenarioInfo();
+        updateScene(0); updatePanels(0);
+    }
+
+    function displayTime() {
+        const sim = state.sim;
+        return sim.finished ? Math.min(state.simT, sim.endTime) : state.simT;
+    }
+
+    function animate(now) {
+        requestAnimationFrame(animate);
+        if (state.lastFrame === null) state.lastFrame = now;
+        const dt = Math.min((now - state.lastFrame) / 1000, 0.1);
+        state.lastFrame = now;
+
+        if (state.playing && !state.sim.finished) {
+            state.simT += dt * SPEEDS[state.speedIdx];
+            state.sim.runUntil(state.simT);
+        }
+        const t = displayTime();
+        if (state.sim.finished && state.playing) {
+            state.playing = false;
+            if (!state.autoShown) { state.autoShown = true; setTimeout(() => showAnalytics(), 600); }
+        }
+        updateScene(t);
+        updatePanels(t);
+        controls.update();
+        renderer.render(scene, camera);
+        updateLabels();
+    }
+
+    // ------------------------------------------------------------------
+    // Resultados
+    // ------------------------------------------------------------------
+    const charts = {};
+    function makeChart(id, config) {
+        if (charts[id]) charts[id].destroy();
+        charts[id] = new Chart($(id), config);
+    }
+    const axisStyle = { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,.5)' } };
+
+    function kpiCard(label, value, color) {
+        return `<div class="stat-card"><span class="stat-label">${label}</span><span class="stat-value" style="color:${color}">${value}</span></div>`;
+    }
+
+    function renderRun() {
+        const sim = state.sim;
+        const r = sim.results();
+        $('run-subtitle').textContent = `${r.scenarioName} (cada ${r.headwayMin} min) · réplica ${r.replication} · ${r.busesDispatched} buses · fin de la corrida ${formatClock(r.endTime)}`;
+        $('run-kpis').innerHTML = [
+            kpiCard('Espera promedio', fmtMin(r.avgWaitMin), '#67e8f9'),
+            kpiCard('Pasajeros transportados', r.transported, '#818cf8'),
+            kpiCard('No abordados al cierre', r.notBoarded, '#fbbf24'),
+            kpiCard('Recorrido promedio L1→L6', fmtMin(r.avgTravelMin), '#c084fc'),
+            kpiCard('Pasajeros generados', r.generated, '#34d399'),
+            kpiCard('Quedados por bus lleno', r.leftBehindEvents, '#f87171')
+        ].join('');
+
+        $('run-stops').innerHTML = `<thead><tr><th>Parada</th><th class="num">Generados</th><th class="num">Abordaron</th><th class="num">Espera prom.</th><th class="num">Cola máx.</th><th class="num">Quedan</th><th class="num">Intervalo obs.</th></tr></thead><tbody>`
+            + [0, 1, 2, 3].map(k => `<tr><td>${STOPS[k + 1].id} ${STOPS[k + 1].name}</td><td class="num">${r.generatedByStop[k]}</td><td class="num">${r.boardedByStop[k]}</td><td class="num">${fmtMin(r.avgWaitByStopMin[k])}</td><td class="num">${r.maxQueue[k]}</td><td class="num">${r.leftByStop[k]}</td><td class="num">${fmtMin(r.observedHeadwayMin[k])}</td></tr>`).join('')
+            + `<tr><td>L6 ${STOPS[5].name}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">${fmtMin(r.observedHeadwayMin[4])}</td></tr></tbody>`;
+
+        const checks = [
+            ['Generados = abordados + en cola al cierre', r.checks.conservation, `${r.generated} = ${r.transported} + ${r.notBoarded}`],
+            ['Abordados = descensos acumulados L2–L6', r.checks.boardedEqualsAlighted, `${r.transported} = ${r.alighted}`],
+            ['Todos los buses salen vacíos de L6', r.checks.busesLeaveEmpty, ''],
+            ['Todos los buses despachados terminaron', r.checks.allBusesFinished, `${r.busesDispatched} de ${r.busesScheduled}`]
+        ];
+        $('run-checks').innerHTML = checks.map(([l, ok, d]) => `<li class="${ok ? 'check-ok' : 'check-bad'}">${ok ? '✔' : '✘'} ${l} <span class="text-slate-500">${d}</span></li>`).join('');
+
+        makeChart('runQueueChart', {
+            type: 'line',
+            data: { labels: sim.samples.map(x => formatClock(x.t).slice(0, 5)), datasets: [1, 2, 3, 4].map((i, k) => ({ label: `${STOPS[i].id} ${STOPS[i].short}`, data: sim.samples.map(x => x.queues[k]), borderColor: QUEUE_COLORS[k], backgroundColor: QUEUE_COLORS[k], pointRadius: 0, borderWidth: 2, tension: 0.2 })) },
+            options: { animation: false, responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#cbd5e1' } } }, scales: { x: axisStyle, y: Object.assign({ beginAtZero: true, title: { display: true, text: 'Pasajeros en cola', color: '#94a3b8' } }, axisStyle) } }
+        });
+    }
+
+    function diffClass(key, diff) {
+        if (diff === null || Math.abs(diff) < 1e-9 || key === 'headwayMin') return 'neutral';
+        const higherIsBetter = key === 'transported';
+        return (diff > 0) === higherIsBetter ? 'better' : 'worse';
+    }
+
+    function renderExperiment() {
+        const ex = state.experiment;
+        if (!ex) return;
+        $('exp-empty').classList.add('hidden');
+        $('exp-content').classList.remove('hidden');
+        $('btn-csv').classList.remove('hidden');
+
+        $('exp-compare').innerHTML = `<thead><tr><th>Indicador</th><th class="num">Inicial (20 min)</th><th class="num">Alternativo (15 min)</th><th class="num">Diferencia absoluta</th><th class="num">Variación %</th></tr></thead><tbody>`
+            + ex.comparison.map(c => {
+                const cls = diffClass(c.key, c.diff);
+                const sign = c.diff > 0 ? '+' : '';
+                const pct = c.pct === null ? (c.diff === null ? 'N/D' : 'No aplica') : sign + fmt(c.pct, 1) + ' %';
+                return `<tr><td>${c.label}</td><td class="num">${fmt(c.initial, c.decimals)}</td><td class="num">${fmt(c.alternative, c.decimals)}</td><td class="num ${cls}">${c.diff === null ? 'N/D' : sign + fmt(c.diff, c.decimals)}</td><td class="num ${cls}">${pct}</td></tr>`;
+            }).join('') + '</tbody>';
+
+        const get = k => ex.comparison.find(c => c.key === k);
+        const w = get('avgWaitMin'), nb = get('notBoarded'), tr = get('avgTravelMin');
+        const findings = [];
+        if (w.diff !== null) findings.push(`• Con despachos cada 15 min, la espera promedio pasa de <b>${fmt(w.initial, 2)}</b> a <b>${fmt(w.alternative, 2)} min</b> (${w.diff > 0 ? '+' : ''}${fmt(w.diff, 2)} min; ${w.pct === null ? 'variación no aplica' : fmt(w.pct, 1) + ' %'}).`);
+        findings.push(`• Pasajeros no abordados al cierre: <b>${fmt(nb.initial, 1)}</b> en el escenario inicial frente a <b>${fmt(nb.alternative, 1)}</b> en el alternativo (promedio por réplica).`);
+        findings.push(`• Se quedaron por bus lleno (eventos promedio por réplica): <b>${fmt(ex.summary.inicial.leftBehindEvents, 1)}</b> en el inicial y <b>${fmt(ex.summary.alternativo.leftBehindEvents, 1)}</b> en el alternativo.`);
+        if (tr.diff !== null) findings.push(`• El tiempo promedio de recorrido L1→L6 cambia ${fmt(tr.diff, 2)} min, porque los tiempos de parada dependen de cuántos pasajeros suben y bajan.`);
+        const ok = ex.records.every(r => r.checks.conservation && r.checks.boardedEqualsAlighted && r.checks.busesLeaveEmpty && r.checks.allBusesFinished);
+        findings.push(`• Verificaciones de consistencia en las ${ex.records.length} réplicas: <b class="${ok ? 'check-ok' : 'check-bad'}">${ok ? 'todas cumplen' : 'hay réplicas que no cumplen; revisar el registro'}</b>.`);
+        $('exp-findings').innerHTML = findings.map(f => `<p>${f}</p>`).join('');
+
+        const ini = ex.records.filter(r => r.scenario === 'inicial'), alt = ex.records.filter(r => r.scenario === 'alternativo');
+        makeChart('expWaitChart', {
+            type: 'bar',
+            data: { labels: ini.map(r => 'Réplica ' + r.replication), datasets: [
+                { label: 'Inicial (20 min)', data: ini.map(r => r.avgWaitMin), backgroundColor: '#f59e0b' },
+                { label: 'Alternativo (15 min)', data: alt.map(r => r.avgWaitMin), backgroundColor: '#6366f1' }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#cbd5e1' } } }, scales: { x: axisStyle, y: Object.assign({ beginAtZero: true, title: { display: true, text: 'min', color: '#94a3b8' } }, axisStyle) } }
+        });
+        makeChart('expQueueChart', {
+            type: 'bar',
+            data: { labels: [1, 2, 3, 4].map(i => `${STOPS[i].id} ${STOPS[i].short}`), datasets: [
+                { label: 'Inicial (20 min)', data: [0, 1, 2, 3].map(k => ex.summary.inicial['maxQueue' + k]), backgroundColor: '#f59e0b' },
+                { label: 'Alternativo (15 min)', data: [0, 1, 2, 3].map(k => ex.summary.alternativo['maxQueue' + k]), backgroundColor: '#6366f1' }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#cbd5e1' } } }, scales: { x: axisStyle, y: Object.assign({ beginAtZero: true, title: { display: true, text: 'pasajeros', color: '#94a3b8' } }, axisStyle) } }
+        });
+
+        $('exp-records').innerHTML = `<thead><tr><th>Escenario</th><th class="num">Réplica</th><th class="num">Generados</th><th class="num">Transportados</th><th class="num">No abordados</th><th class="num">Espera prom. (min)</th><th class="num">Cola máx. L2/L3/L4/L5</th><th class="num">Recorrido prom. (min)</th><th class="num">Quedados por bus lleno</th><th class="num">Verificación</th></tr></thead><tbody>`
+            + ex.records.map(r => {
+                const ok = r.checks.conservation && r.checks.boardedEqualsAlighted && r.checks.busesLeaveEmpty && r.checks.allBusesFinished;
+                return `<tr><td>${r.scenarioName}</td><td class="num">${r.replication}</td><td class="num">${r.generated}</td><td class="num">${r.transported}</td><td class="num">${r.notBoarded}</td><td class="num">${fmt(r.avgWaitMin, 2)}</td><td class="num">${r.maxQueue.join(' / ')}</td><td class="num">${fmt(r.avgTravelMin, 2)}</td><td class="num">${r.leftBehindEvents}</td><td class="num ${ok ? 'check-ok' : 'check-bad'}">${ok ? '✔' : '✘'}</td></tr>`;
+            }).join('') + '</tbody>';
+    }
+
+    function downloadCsv() {
+        const ex = state.experiment; if (!ex) return;
+        const num = v => (v === null || v === undefined) ? '' : String(Math.round(v * 1000) / 1000);
+        const rows = [['escenario', 'replica', 'intervalo_min', 'buses', 'generados', 'transportados', 'no_abordados', 'espera_prom_min', 'espera_max_min', 'cola_max_L2', 'cola_max_L3', 'cola_max_L4', 'cola_max_L5', 'recorrido_prom_min', 'quedados_bus_lleno', 'conservacion_ok', 'abordados_igual_descensos_ok', 'buses_vacios_ok']];
+        ex.records.forEach(r => rows.push([r.scenario, r.replication, r.headwayMin, r.busesDispatched, r.generated, r.transported, r.notBoarded, num(r.avgWaitMin), num(r.maxWaitMin), ...r.maxQueue, num(r.avgTravelMin), r.leftBehindEvents, r.checks.conservation, r.checks.boardedEqualsAlighted, r.checks.busesLeaveEmpty]));
+        rows.push([]);
+        rows.push(['indicador', 'promedio_inicial', 'promedio_alternativo', 'diferencia_absoluta', 'variacion_pct']);
+        ex.comparison.forEach(c => rows.push([c.label, num(c.initial), num(c.alternative), num(c.diff), c.pct === null ? 'no aplica' : num(c.pct)]));
+        const csv = '﻿' + rows.map(r => r.map(v => /[",;\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v).join(',')).join('\n');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        a.download = 'resultados_M502_replicas.csv';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    function showAnalytics(scrollToExperiment) {
+        state.playing = false;
+        const sim = state.sim;
+        $('analytics-page').classList.add('active');   // visible antes de dibujar las gráficas
+        if (sim.finished) {
+            $('run-section').classList.remove('hidden');
+            renderRun();
+            $('analytics-status').textContent = 'Corrida completa: ' + SCENARIOS[state.scenario].name + ', réplica ' + state.replication;
+        } else {
+            $('run-section').classList.add('hidden');
+            $('analytics-status').textContent = 'Comparación de escenarios';
+        }
+        renderExperiment();
+        if (scrollToExperiment) setTimeout(() => $('exp-section').scrollIntoView({ behavior: 'smooth' }), 50);
+        else $('analytics-page').scrollTop = 0;
+    }
+
+    function runExperimentNow() {
+        state.experiment = runExperiment();
+        renderExperiment();
+    }
+
+    // ------------------------------------------------------------------
+    // Eventos de la interfaz
+    // ------------------------------------------------------------------
+    document.querySelectorAll('.scenario-btn').forEach(btn => btn.addEventListener('click', () => {
+        state.scenario = btn.dataset.scenario; resetSimulation();
+    }));
+    $('param-rep').addEventListener('input', e => {
+        state.replication = Number(e.target.value);
+        $('val-rep').textContent = `${state.replication} de ${MODEL.replications}`;
+        resetSimulation();
+    });
+    $('param-speed').addEventListener('input', e => {
+        state.speedIdx = Number(e.target.value);
+        $('val-speed').textContent = 'x' + SPEEDS[state.speedIdx];
+    });
+    $('btn-play').addEventListener('click', () => { if (state.sim.finished) resetSimulation(); state.playing = true; });
+    $('btn-pause').addEventListener('click', () => { state.playing = false; });
+    $('btn-reset').addEventListener('click', resetSimulation);
+    $('btn-finish').addEventListener('click', () => {
+        state.sim.runToEnd();
+        state.simT = state.sim.endTime; state.autoShown = true;
+        showAnalytics(false);
+    });
+    $('btn-experiment').addEventListener('click', () => {
+        if (!state.experiment) runExperimentNow();
+        showAnalytics(true);
+    });
+    $('btn-run-exp').addEventListener('click', runExperimentNow);
+    $('btn-csv').addEventListener('click', downloadCsv);
+    $('btn-back-sim').addEventListener('click', () => $('analytics-page').classList.remove('active'));
+
+    // ------------------------------------------------------------------
+    // Inicio
+    // ------------------------------------------------------------------
+    initThree();
+    initLiveChart();
+    resetSimulation();
+    requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>
