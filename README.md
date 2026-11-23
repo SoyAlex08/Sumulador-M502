@@ -49,6 +49,28 @@ Simular la operación de la ruta M502 para analizar los tiempos de espera de los
 - Después de las 9:00 los autobuses en ruta terminan el recorrido y todavía pueden recoger a quienes esperan.
 - La corrida termina cuando todos los autobuses despachados salen de L6.
 
+### 5.3. Recorrido real en la visualización
+
+La vista 3D muestra el recorrido real de la M502 (sentido Tumba Muerto – Mañanitas) sobre un mapa de la ciudad de Panamá:
+
+- **Paradas:** las 53 paradas de la línea, en el orden publicado por Moovit.
+- **Coordenadas:** paradas de MiBus registradas en OpenStreetMap. Nueve paradas sin registro (Nueva California, Balmoral, Pazko, Villa Lobos, Los Nogales 2, La Pagoda, Belén, Villa Belén y Las Trancas) se ubicaron de forma aproximada por barrio o calle y se muestran en gris.
+- **Trazado por calles:** calculado con OSRM sobre datos de OpenStreetMap: **29.9 km** desde Estación Marañón hasta Calle Peña Blanca.
+- **Mapa base:** Esri (calles en gris oscuro o vista satelital).
+
+Las seis ubicaciones del modelo quedan en su kilómetro real del recorrido:
+
+| Código | Parada | Parada n.º (de 53) | km desde L1 |
+|---|---|---:|---:|
+| L1 | Estación Marañón – Bahía 14 | 1 | 0.0 |
+| L2 | El Dorado-R | 12 | 7.1 |
+| L3 | Metro Villa Lucre-R | 25 | 15.0 |
+| L4 | Cerro Viento-R | 31 | 18.4 |
+| L5 | Las Trancas-R | 51 | 28.8 |
+| L6 | Calle Peña Blanca-R | 53 | 29.9 |
+
+En el modelo, el autobús solo se detiene en L1–L6; las demás paradas se muestran como referencia. Los datos del recorrido están en [js/ruta-m502.js](js/ruta-m502.js).
+
 ## 6. Parámetros de entrada
 
 ### 6.1. Escenarios (Tabla 10)
@@ -136,6 +158,7 @@ Se genera un valor independiente por autobús y por tramo. Los tiempos de parada
 ```
 index.html               Interfaz: vista 3D, paneles y resultados
 js/motor-simulacion.js   Motor de eventos discretos, indicadores y experimento
+js/ruta-m502.js          Recorrido real: 53 paradas, coordenadas y trazado por calles
 README.md
 ```
 
@@ -148,6 +171,7 @@ node -e "const M=require('./js/motor-simulacion.js'); console.table(M.runExperim
 ## 12. Alcance y limitaciones
 
 - No se modelan los vehículos particulares fuera de la ruta ni la infraestructura vial.
-- La vista 3D es esquemática y no está a escala geográfica.
+- La vista 3D usa el recorrido real, pero los tiempos de viaje del modelo vienen de la Tabla 13 y no de las distancias reales. Por eso el autobús avanza a distinta velocidad en cada tramo (por ejemplo, L5→L6 mide 1.1 km y tiene una moda de 9 min).
+- Los autobuses y paradas se dibujan más grandes que su tamaño real para que se vean sobre el mapa.
 - Los resultados dependen de los parámetros supuestos de demanda, viaje y servicio. El alcance es académico y los resultados no representan datos oficiales de MiBus.
 - Referencias de contexto: MiBus indica una capacidad de 80 personas para los modelos Gran Viale y Torino; Moovit reporta un intervalo de referencia de 27 minutos para la M502. Los intervalos de 20 y 15 minutos son una elección experimental del proyecto.
